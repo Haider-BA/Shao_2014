@@ -1,0 +1,59 @@
+<?xml version="1.0" ?>
+<!-- Configuration parameters for my simulation -->
+
+<Geometry>
+    <size>
+    <!-- Number of lattice nodes in each space direction. -->
+        <nx> 128  </nx>
+        <ny> 128 </ny>
+    </size>
+</Geometry>
+<Physics>
+    <rho_l>
+       1000.
+    </rho_l>
+    <rho_g>
+       1.
+    </rho_g>
+    <Re>
+    <!-- Reynolds number in lattice units. -->
+        10
+    </Re>
+    <gravity>
+        0.0
+    </gravity>
+    <umax>
+    <!-- Maximum velocity in lattice units. -->
+        0.01
+    </umax>
+    <radius>
+       20
+    </radius>
+    <width>
+       4
+    </width>
+    <sigma>
+       0.5
+    </sigma>
+    <Mob>
+       500
+    </Mob>
+</Physics>
+<Numerics>
+    <load_check_point>
+       false
+    </load_check_point>
+    <checkpointTime>
+      1e2 
+    </checkpointTime>
+    <timeend>
+      5e2
+    </timeend>
+    <timesave_fluid>
+      1e0
+    </timesave_fluid>
+    <timeStop>
+       85900
+    </timeStop>
+</Numerics>
+

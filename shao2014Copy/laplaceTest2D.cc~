@@ -1,0 +1,262 @@
+/* This file is part of the Palabos library.
+ *
+ * Copyright (C) 2011 FlowKit Sarl
+ * Avenue de Chailly 23
+ * 1012 Lausanne, Switzerland
+ * E-mail contact: contact@flowkit.com
+ *
+ * The most recent release of Palabos can be downloaded at 
+ * <http://www.palabos.org/>
+ *
+ * The library Palabos is free software: you can redistribute it and/or
+ * modify it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * The library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "palabos2D.h"
+#include "palabos2D.hh"
+#include <cstdlib>
+#include <iostream>
+
+#include "shaoDynamics.cpp"
+#include "shaoProcessor.cpp"
+#include "shaoLattice.h"
+
+using namespace plb;
+using namespace slilab;
+using namespace std;
+
+// Use double-precision arithmetics
+typedef double T;
+#define DESCRIPTOR_NS   descriptors::ShaoD2Q9Descriptor
+#define DESCRIPTOR_PF descriptors::ShaoD2Q5Descriptor
+
+/// Initial condition: heavy nsLattice at center, light nsLattice at ....
+/** This functional is going to be used as an argument to the function "applyIndexed",
+ *  to setup the initial condition. For efficiency reasons, this approach should
+ *  always be preferred over explicit space loops in end-user codes.
+ */
+
+
+template<typename T_f, template<typename U_f> class Descriptor_f, typename T_p, template<typename U_p> class Descriptor_p>
+class DropletInitializer : public BoxProcessingFunctional2D_LL<T_f,Descriptor_f,T_p,Descriptor_p>
+{
+public :
+
+	DropletInitializer(plint nx_, plint ny_, T_p radius, T_p cn,
+			   T_p a, T_p k, T_p pc, T_p rho_high, T_p rho_low) :
+				nx(nx_), ny(ny_),
+				r2(radius*radius),
+				width(cn),
+				aCoef(a),
+				kappa(k),
+				phiCoef(pc),
+				rho_h(rho_high),
+				rho_l(rho_low)
+{ };
+
+  
+  virtual void process(Box2D domain,BlockLattice2D<T_f,Descriptor_f>& lattice_f, BlockLattice2D<T_p,Descriptor_p>& lattice_p)
+	{
+	  
+		Array<T_p,2> zeroVelocity(0,0);
+		Dot2D Offset = lattice_p.getLocation();
+		for (plint iX = domain.x0; iX <= domain.x1; ++iX) {
+		  for (plint iY = domain.y0; iY <= domain.y1; ++iY) {
+				
+		    const plint gX = iX+Offset.x;
+		    const plint gY = iY+Offset.y;
+
+		    T_p rx = gX-nx/2;
+		    T_p ry = gY-ny/2;
+
+		    T_p rSqr = sqrt(rx*rx + ry*ry );
+		    T_p phi = phiCoef*tanh( (T_p)2*(rSqr-sqrt(r2))/width );
+		    T_p lapPhi = 0;
+		   
+		    T_p mu = aCoef*( (T_p)4*phi*phi*phi - (T_p)4*phiCoef*phiCoef*phi ) - kappa * lapPhi;
+					
+		    T_p phiBar = Descriptor_p<T_p>::rhoBar(phi);
+		    Array< T_p, SymmetricTensor< T_p, Descriptor_p >::n > PiNeq;
+		  
+		    lattice_p.get(iX,iY).regularize( phiBar, zeroVelocity, (T_p)0, PiNeq);
+		  
+		    
+		    lattice_p.get(iX,iY).setExternalField (
+							   Descriptor_p<T_p>::ExternalField::velocityBeginsAt,
+							   Descriptor_p<T_p>::ExternalField::sizeOfVelocity, &zeroVelocity[0] );
+		    T_f rho = rho_l + ((phi+phiCoef)/(2*phiCoef))*(rho_h-rho_l);
+		   
+		    lattice_f.get(iX,iY).setExternalField (
+							   Descriptor_f<T_f>::ExternalField::densityBeginsAt,
+							   Descriptor_f<T_f>::ExternalField::sizeOfDensity, &rho );
+		 
+			}
+		 
+		}
+	
+	};
+  
+  virtual DropletInitializer<T_f,Descriptor_f,T_p,Descriptor_p>*
+	clone() const
+	{
+		return new DropletInitializer<T_f,Descriptor_f,T_p,Descriptor_p>(*this);
+	};
+	virtual void getModificationPattern(std::vector<bool>& isWritten) const
+	{
+	  
+		isWritten[0] = true;
+	};
+	virtual void getTypeOfModification(std::vector<modif::ModifT>& modified) const
+	{ 
+		modified[0] = modif::staticVariables;
+	
+	}
+	virtual bool includeEnvelope() const
+  {pcout<<" includeEnv"<<std::endl;
+		return false;
+	};
+
+private :
+	T_p width, r2;
+	plint nx, ny;
+  T_p aCoef, kappa, phiCoef, rho_h, rho_l;
+};
+
+
+
+
+int main(int argc, char *argv[])
+{
+	plbInit(&argc, &argv);
+	global::directories().setOutputDir("./tmp/");
+
+	const T omegaF = 1.0;
+	const T omegaP = 1.0/0.7;
+	const plint nx   = 50;
+	const plint ny   = 50;
+	const plint radius = 10;
+	const plint maxIter  = 5;
+	const plint saveIter = 1;
+	const plint statIter = 1000;
+
+	const T rho_l = 1.0;
+	const T rho_h = 1000;
+	const T phiCoef = (rho_h-rho_l)/2.0;
+	const T W = 4;
+	const T sigma = 0.1;
+	const T kappa = (T)3/(T)8*sigma*W/phiCoef/phiCoef;
+	const T aCoef = 3./4*sigma/W/pow(phiCoef,4.0);
+//	const T aCoef = 0.001;
+	const T Gamma = 100;
+	const T qCoef = (T)1/((T)1/omegaP+(T)0.5);
+	const T grav = 0.0;//1e-6*phiCoef;
+
+
+
+	Dynamics<T,DESCRIPTOR_PF> *cellDynamic = new CahnHilliardDynamics<T, DESCRIPTOR_PF>(omegaP);
+	cellDynamic->setParameter( slilab::Shao::Gamma, Gamma );
+	cellDynamic->setParameter( slilab::Shao::qCoef, qCoef );
+
+	MultiBlockLattice2D<T, DESCRIPTOR_NS> nsLattice ( nx,ny, new ShaoBGKdynamics<T,DESCRIPTOR_NS>(omegaF) );
+
+	MultiBlockLattice2D<T, DESCRIPTOR_PF> pfLattice ( nx,ny, cellDynamic );
+
+       	
+	// Checking the lattice type
+	PLB_ASSERT(DESCRIPTOR_NS<T>::ExternalField::numScalars);
+	PLB_ASSERT(DESCRIPTOR_PF<T>::ExternalField::numScalars);
+
+		// laplaceSetup(nsLattice, r_phase1, r_phase2, radius);
+	applyProcessingFunctional(new DropletInitializer<T,DESCRIPTOR_NS,T,DESCRIPTOR_PF>(nx, ny, radius, W, aCoef, kappa, phiCoef, rho_h, rho_l),
+				  pfLattice.getBoundingBox(),
+				  nsLattice, 
+				  pfLattice
+				  );
+
+	// Make periodic.
+	nsLattice.periodicity().toggleAll(true);
+	pfLattice.periodicity().toggleAll(true);
+
+	
+	initializeAtEquilibrium(nsLattice, nsLattice.getBoundingBox(), phiCoef+1, Array<T,2>(0.,0.) );
+
+
+	//////////////////////////////////////to define phi////////////////////////////////////////
+	plint envelopeWidth = 2;
+	MultiBlockManagement2D sparseBlockManagement(nsLattice.getMultiBlockManagement());
+	// std::auto_ptr<MultiScalarField2D<T> > phiField = 
+	MultiScalarField2D<T> *phiField = 
+            new plb::MultiScalarField2D<T> (
+               MultiBlockManagement2D (
+                  sparseBlockManagement.getSparseBlockStructure(),
+                  sparseBlockManagement.getThreadAttribution().clone(),
+                  envelopeWidth ),
+               defaultMultiBlockPolicy2D().getBlockCommunicator(),
+               defaultMultiBlockPolicy2D().getCombinedStatistics(),
+	       defaultMultiBlockPolicy2D().getMultiScalarAccess<T>() );
+
+	/*	applyProcessingFunctional(new BoxDensityFunctional2D<T,DESCRIPTOR_PF>(),
+				  pfLattice.getBoundingBox(),
+				  pfLattice,
+				  phiField
+				  );*/
+				       
+	
+	std::vector<MultiBlock2D*> phi_Arg;   // to pass phi,output
+   
+	phi_Arg.push_back(&nsLattice);
+	phi_Arg.push_back(&pfLattice);
+	phi_Arg.push_back(phiField); 
+
+	//////////////////////////////////////////////////////////////////////////////////////////
+	plint processorLevel = 1;
+	integrateProcessingFunctional (new ShaoProcessor2D<T,DESCRIPTOR_NS,T,DESCRIPTOR_PF>(aCoef, kappa, phiCoef, grav, rho_h, rho_l),
+			nsLattice.getBoundingBox(),
+			phi_Arg,
+			processorLevel );
+
+
+
+	pfLattice.initialize();
+	nsLattice.initialize(); // .executeInternalProcessors(1);
+
+	// nsLattice.executeInternalProcessors();
+	/*	MultiScalarField2D<T> *rho=new plb::MultiScalarField2D<T>(nsLattice);
+	Box2D domain = nsLattice.getBoundingBox();
+	for (plint iX = domain.x0; iX <= domain.x1; ++iX) {
+		  for (plint iY = domain.y0; iY <= domain.y1; ++iY) {
+		    rho->get(iX,iY) = *nsLattice.get(iX,iY).getExternal(DESCRIPTOR_NS<T>::ExternalField::densityBeginsAt);
+		    pcout<<"rho->get(iX,iY)"<<(*nsLattice.get(iX,iY).getExternal(DESCRIPTOR_NS<T>::ExternalField::densityBeginsAt))<<std::endl;
+		    getchar();
+		  }
+		  }*/
+	pcout << "Starting simulation" << endl;
+	// Main loop over time iterations.
+	for (int iT=0; iT<maxIter; ++iT) {
+		if (iT%saveIter==0) {
+			VtkImageOutput2D<T> vtkOut(createFileName("data", iT, 6), 1.);
+			vtkOut.writeData<float>(*computeDensity( pfLattice ), "phi", 1.);
+			vtkOut.writeData<float>(*computeDensity( nsLattice ), "density", 1.);
+			pcout<<"in laplace after computedensity"<<std::endl;
+			getchar();
+			vtkOut.writeData<2,float>(*computeVelocity( nsLattice ), "velocity", 1.);
+			//	vtkOut.writeData<float>(*rho, "local_density", 1.);
+		}
+
+		// Time iteration for the light nsLattice.
+		pfLattice.collideAndStream();
+		nsLattice.collideAndStream();
+
+		}
+}
+
